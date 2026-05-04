@@ -369,7 +369,6 @@ fn build_transition(pair: Pair<'_, Rule>) -> Result<Transition> {
     let mut body = Vec::new();
     let mut postconditions = Vec::new();
     let mut emits = Vec::new();
-    let mut asserts = Vec::new();
 
     for part in inner {
         match part.as_rule() {
@@ -398,8 +397,7 @@ fn build_transition(pair: Pair<'_, Rule>) -> Result<Transition> {
                             let assert_span = span_from(&clause);
                             let expr_pair = clause.into_inner().next().unwrap();
                             let condition = build_expr(expr_pair)?;
-                            asserts
-                                .push(Spanned::new(Statement::Assert { condition }, assert_span));
+                            body.push(Spanned::new(Statement::Assert { condition }, assert_span));
                         }
                         Rule::statement => {
                             body.push(build_statement(clause)?);
@@ -411,9 +409,6 @@ fn build_transition(pair: Pair<'_, Rule>) -> Result<Transition> {
             _ => {}
         }
     }
-
-    // Insert asserts after body statements but before postconditions
-    body.extend(asserts);
 
     Ok(Transition {
         name,

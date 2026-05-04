@@ -32,9 +32,7 @@ fn run_with_consts(source: &str) -> Vec<(String, Engine)> {
             for c in &state.constants {
                 engine.load_const(c).unwrap();
             }
-            if let Some(init) = &state.init {
-                engine.initialize(init).unwrap();
-            }
+            engine.initialize_state(state).unwrap();
 
             results.push((state.name.node.clone(), engine));
         }
@@ -51,7 +49,7 @@ fn runtime_counter_init() {
     for item in &program.items {
         if let Item::State(state) = &item.node {
             let mut engine = Engine::new(&state.name.node);
-            engine.initialize(state.init.as_ref().unwrap()).unwrap();
+            engine.initialize_state(state).unwrap();
 
             assert_eq!(engine.get_field("value"), Some(&Value::Int(0)));
             assert_eq!(engine.get_field("max_value"), Some(&Value::Int(100)));
@@ -67,7 +65,7 @@ fn runtime_counter_increment() {
     for item in &program.items {
         if let Item::State(state) = &item.node {
             let mut engine = Engine::new(&state.name.node);
-            engine.initialize(state.init.as_ref().unwrap()).unwrap();
+            engine.initialize_state(state).unwrap();
 
             let transition = state
                 .transitions
@@ -95,7 +93,7 @@ fn runtime_counter_precondition_fail() {
     for item in &program.items {
         if let Item::State(state) = &item.node {
             let mut engine = Engine::new(&state.name.node);
-            engine.initialize(state.init.as_ref().unwrap()).unwrap();
+            engine.initialize_state(state).unwrap();
 
             let transition = state
                 .transitions
@@ -123,7 +121,7 @@ fn runtime_token_transfer() {
     for item in &program.items {
         if let Item::State(state) = &item.node {
             let mut engine = Engine::new(&state.name.node);
-            engine.initialize(state.init.as_ref().unwrap()).unwrap();
+            engine.initialize_state(state).unwrap();
 
             let transition = state
                 .transitions
@@ -178,7 +176,7 @@ fn runtime_let_and_match() {
     for item in &program.items {
         if let Item::State(state) = &item.node {
             let mut engine = Engine::new(&state.name.node);
-            engine.initialize(state.init.as_ref().unwrap()).unwrap();
+            engine.initialize_state(state).unwrap();
 
             let transition = state
                 .transitions
@@ -301,6 +299,110 @@ fn runtime_top_level_const_visible_in_transition() {
             assert!(
                 result.is_err(),
                 "setting value above MAX should fail the precondition"
+            );
+        }
+    }
+}
+
+#[test]
+fn runtime_initializes_collections_not_set_in_init() {
+    let source = r#"
+        state Collections {
+            arr: int[4]
+            balances: map[int, int]
+            count: int
+
+            init {
+                count = 0
+            }
+
+            transition put(v: int) {
+                where {
+                    v > 0
+                }
+                arr[count] = v
+                balances[count] += v
+                count += 1
+            }
+        }
+    "#;
+
+    let program = parse_source(source).unwrap();
+    for item in &program.items {
+        if let Item::State(state) = &item.node {
+            let mut engine = Engine::new(&state.name.node);
+            engine.initialize_state(state).unwrap();
+
+            let transition = state.transitions.iter().find(|t| t.name.node == "put").unwrap();
+            let mut args = HashMap::new();
+            args.insert("v".to_string(), Value::Int(7));
+
+            engine
+                .execute_transition(transition, args, &state.invariants)
+                .unwrap();
+
+            assert_eq!(engine.get_field("count"), Some(&Value::Int(1)));
+            match engine.get_field("arr") {
+                Some(Value::Array(items)) => {
+                    assert_eq!(items.first(), Some(&Value::Int(7)));
+                }
+                other => panic!("expected array field, got {:?}", other),
+            }
+            match engine.get_field("balances") {
+                Some(Value::Map(entries)) => {
+                    assert_eq!(entries.get("0"), Some(&Value::Int(7)));
+                }
+                other => panic!("expected map field, got {:?}", other),
+            }
+        }
+    }
+}
+
+#[test]
+fn runtime_match_accepts_enum_string_argument() {
+    let source = r#"
+        enum Side { Buy, Sell }
+
+        state M {
+            side: Side
+
+            init {
+                side = Side::Buy
+            }
+
+            transition set(next: Side) {
+                match next {
+                    Side::Buy => {
+                        side = Side::Buy
+                    },
+                    Side::Sell => {
+                        side = Side::Sell
+                    }
+                }
+            }
+        }
+    "#;
+
+    let program = parse_source(source).unwrap();
+    for item in &program.items {
+        if let Item::State(state) = &item.node {
+            let mut engine = Engine::new(&state.name.node);
+            engine.initialize_state(state).unwrap();
+
+            let transition = state.transitions.iter().find(|t| t.name.node == "set").unwrap();
+            let mut args = HashMap::new();
+            args.insert("next".to_string(), Value::String("Side::Sell".to_string()));
+
+            engine
+                .execute_transition(transition, args, &state.invariants)
+                .unwrap();
+
+            assert_eq!(
+                engine.get_field("side"),
+                Some(&Value::Enum {
+                    enum_name: "Side".to_string(),
+                    variant: "Sell".to_string(),
+                })
             );
         }
     }

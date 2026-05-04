@@ -33,6 +33,19 @@ impl Engine {
         Ok(())
     }
 
+    pub fn initialize_state(&mut self, state: &StateDef) -> Result<()> {
+        for field in &state.fields {
+            let default = Self::default_for_type(&field.ty.node);
+            self.state.set(&field.name.node, default);
+        }
+
+        if let Some(init) = &state.init {
+            self.initialize(init)?;
+        }
+
+        Ok(())
+    }
+
     pub fn execute_transition(
         &mut self,
         transition: &Transition,
@@ -250,8 +263,27 @@ impl Engine {
                         enum_name: en,
                         variant: vr
                     } if en == enum_name && vr == variant
+                ) || matches!(
+                    value,
+                    Value::String(s) if s == &format!("{}::{}", enum_name, variant) || s == variant
                 )
             }
+        }
+    }
+
+    fn default_for_type(ty: &crate::ast::types::Type) -> Value {
+        use crate::ast::types::Type;
+
+        match ty {
+            Type::Int => Value::Int(0),
+            Type::Real => Value::Real(0.0),
+            Type::Bool => Value::Bool(false),
+            Type::String => Value::String(String::new()),
+            Type::Array { element, size } => {
+                Value::Array(vec![Self::default_for_type(element); *size])
+            }
+            Type::Map { .. } => Value::Map(HashMap::new()),
+            Type::Enum(_) | Type::Named(_) => Value::Null,
         }
     }
 

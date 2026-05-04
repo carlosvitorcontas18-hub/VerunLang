@@ -376,7 +376,13 @@ impl<'ctx> Verifier<'ctx> {
         self.assert_param_refinements(&transition.params, &all_vars, &session);
 
         self.encode_transition_body(
-            state, transition, &pre_vars, &post_vars, &session, &all_vars,
+            state,
+            transition,
+            &pre_vars,
+            &post_vars,
+            &session,
+            &all_vars,
+            constants,
         );
 
         let mut post_eval_vars = post_vars.clone();
@@ -545,7 +551,13 @@ impl<'ctx> Verifier<'ctx> {
         self.assert_param_refinements(&transition.params, &all_vars, &session);
 
         self.encode_transition_body(
-            state, transition, &pre_vars, &post_vars, &session, &all_vars,
+            state,
+            transition,
+            &pre_vars,
+            &post_vars,
+            &session,
+            &all_vars,
+            constants,
         );
 
         let mut post_eval_vars = all_vars.clone();
@@ -724,6 +736,7 @@ impl<'ctx> Verifier<'ctx> {
         post_vars: &HashMap<String, Dynamic<'ctx>>,
         session: &SolverSession<'ctx>,
         all_vars: &HashMap<String, Dynamic<'ctx>>,
+        constants: &HashMap<String, Dynamic<'ctx>>,
     ) {
         let mut modified_fields: std::collections::HashSet<String> =
             std::collections::HashSet::new();
@@ -743,6 +756,9 @@ impl<'ctx> Verifier<'ctx> {
             if let Some(v) = all_vars.get(&param.name.node) {
                 current_values.insert(param.name.node.clone(), v.clone());
             }
+        }
+        for (name, value) in constants {
+            current_values.insert(name.clone(), value.clone());
         }
 
         for stmt in &transition.body {

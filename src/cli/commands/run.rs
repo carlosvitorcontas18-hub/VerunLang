@@ -55,9 +55,7 @@ pub fn execute(file: &str, transition: Option<&str>, show_state: bool) -> Result
                 engine.load_const(c)?;
             }
 
-            if let Some(init) = &state.init {
-                engine.initialize(init)?;
-            }
+            engine.initialize_state(state)?;
 
             if show_state {
                 println!("State '{}' after init:", state.name.node);
@@ -126,6 +124,15 @@ fn parse_transition_spec(spec: &str) -> Result<(String, Vec<String>)> {
 }
 
 fn parse_value(s: &str) -> Value {
+    if let Some((enum_name, variant)) = s.split_once("::")
+        && !enum_name.is_empty()
+        && !variant.is_empty()
+    {
+        return Value::Enum {
+            enum_name: enum_name.to_string(),
+            variant: variant.to_string(),
+        };
+    }
     if let Ok(v) = s.parse::<i64>() {
         return Value::Int(v);
     }

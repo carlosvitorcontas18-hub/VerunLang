@@ -1,3 +1,4 @@
+use verun::ast::nodes::{Item, Statement};
 use verun::parser::parse_source;
 
 #[test]
@@ -308,5 +309,53 @@ fn parse_match_workflow_example() {
         result.is_ok(),
         "Failed to parse match_workflow.verun: {:?}",
         result.err()
+    );
+}
+
+#[test]
+fn parse_preserves_assert_statement_order() {
+    let source = r#"
+        state S {
+            x: int
+
+            init {
+                x = 0
+            }
+
+            transition step(v: int) {
+                x = v
+                assert x >= 0
+                x = x + 1
+            }
+        }
+    "#;
+
+    let program = parse_source(source).expect("source should parse");
+    let state = program
+        .items
+        .iter()
+        .find_map(|item| match &item.node {
+            Item::State(state) => Some(state),
+            _ => None,
+        })
+        .expect("state should exist");
+    let transition = state
+        .transitions
+        .iter()
+        .find(|t| t.name.node == "step")
+        .expect("transition should exist");
+
+    assert_eq!(transition.body.len(), 3, "expected 3 statements in body");
+    assert!(
+        matches!(transition.body[0].node, Statement::Assign(_)),
+        "first statement should be assignment"
+    );
+    assert!(
+        matches!(transition.body[1].node, Statement::Assert { .. }),
+        "second statement should be assert"
+    );
+    assert!(
+        matches!(transition.body[2].node, Statement::Assign(_) | Statement::CompoundAssign { .. }),
+        "third statement should be assignment/compound assignment"
     );
 }

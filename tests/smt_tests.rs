@@ -693,3 +693,41 @@ fn verify_refinement_type_violation() {
     // Without refinement on param, withdraw can make balance negative
     assert!(passed < total, "Should detect possible negative balance");
 }
+
+#[test]
+fn verify_transition_body_uses_registered_constants() {
+    let source = r#"
+        const STEP: int = 1
+
+        state ConstBody {
+            x: int
+
+            invariant non_negative {
+                x >= 0
+            }
+
+            init {
+                x = 0
+            }
+
+            transition advance(n: int) {
+                where {
+                    n >= 0
+                }
+                let delta: int = n + STEP
+                x = x + delta
+                ensure {
+                    x == old(x) + n + STEP
+                }
+            }
+        }
+    "#;
+
+    let (passed, total) = verify_source(source);
+    assert!(total > 0, "Should have checks");
+    assert_eq!(
+        passed, total,
+        "Constants in transition body must be available in SSA context ({}/{})",
+        passed, total
+    );
+}

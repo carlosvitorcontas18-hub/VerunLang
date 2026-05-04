@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::nodes::*;
 use crate::ast::types::Type;
@@ -40,7 +40,13 @@ impl TypeScriptTarget {
             "export const {}: {} = {};\n\n",
             c.name.node,
             self.type_to_ts(&c.ty.node),
-            self.expr_to_ts(&c.value.node, &HashSet::new(), &HashSet::new(), false)
+            self.expr_to_ts(
+                &c.value.node,
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashMap::new(),
+                false,
+            )
         )
     }
 
@@ -75,6 +81,11 @@ impl TypeScriptTarget {
 
     fn gen_state(&self, state: &StateDef) -> String {
         let mut out = String::new();
+        let field_types: HashMap<String, Type> = state
+            .fields
+            .iter()
+            .map(|f| (f.name.node.clone(), f.ty.node.clone()))
+            .collect();
 
         for c in &state.constants {
             out.push_str(&self.gen_const(c));
@@ -91,27 +102,53 @@ impl TypeScriptTarget {
         }
         out.push('\n');
 
+        out.push_str("  constructor() {\n");
         if let Some(init) = &state.init {
-            out.push_str("  constructor() {\n");
+            let assigned: HashSet<&str> =
+                init.assignments.iter().map(|a| a.target.node.as_str()).collect();
             for assign in &init.assignments {
                 out.push_str(&format!(
                     "    this.{} = {};\n",
                     assign.target.node,
-                    self.expr_to_ts(&assign.value.node, &HashSet::new(), &HashSet::new(), false)
+                    self.expr_to_ts(
+                        &assign.value.node,
+                        &HashSet::new(),
+                        &HashSet::new(),
+                        &HashMap::new(),
+                        false,
+                    )
                 ));
             }
-            out.push_str("  }\n\n");
+            for field in &state.fields {
+                if !assigned.contains(field.name.node.as_str()) {
+                    if let Some(default) = self.default_for_ts_type(&field.ty.node) {
+                        out.push_str(&format!("    this.{} = {};\n", field.name.node, default));
+                    }
+                }
+            }
+        } else {
+            for field in &state.fields {
+                if let Some(default) = self.default_for_ts_type(&field.ty.node) {
+                    out.push_str(&format!("    this.{} = {};\n", field.name.node, default));
+                }
+            }
         }
+        out.push_str("  }\n\n");
 
         for transition in &state.transitions {
-            out.push_str(&self.gen_transition(transition, state));
+            out.push_str(&self.gen_transition(transition, state, &field_types));
         }
 
         out.push_str("}\n\n");
         out
     }
 
-    fn gen_transition(&self, t: &Transition, state: &StateDef) -> String {
+    fn gen_transition(
+        &self,
+        t: &Transition,
+        state: &StateDef,
+        field_types: &HashMap<String, Type>,
+    ) -> String {
         let mut out = String::new();
 
         let param_names: HashSet<String> = t.params.iter().map(|p| p.name.node.clone()).collect();
@@ -133,7 +170,7 @@ impl TypeScriptTarget {
         for pre in &t.preconditions {
             out.push_str(&format!(
                 "    if (!({})) {{ throw new Error(\"precondition failed\"); }}\n",
-                self.expr_to_ts(&pre.node, &param_names, &field_names, false)
+                self.expr_to_ts(&pre.node, &param_names, &field_names, field_types, false)
             ));
         }
 
@@ -147,7 +184,7 @@ impl TypeScriptTarget {
         }
 
         for stmt in &t.body {
-            let stmt_code = self.stmt_to_ts(&stmt.node, &param_names, &field_names);
+            let stmt_code = self.stmt_to_ts(&stmt.node, &param_names, &field_names, field_types);
             if !stmt_code.is_empty() {
                 if self.is_block_statement(&stmt.node) {
                     out.push_str(&format!("    {}\n", stmt_code));
@@ -165,7 +202,7 @@ impl TypeScriptTarget {
                 .unwrap_or("invariant");
             out.push_str(&format!(
                 "    if (!({})) {{ throw new Error(\"invariant '{}' violated after '{}'\"); }}\n",
-                self.expr_to_ts(&inv.condition.node, &param_names, &field_names, false),
+                self.expr_to_ts(&inv.condition.node, &param_names, &field_names, field_types, false),
                 inv_name,
                 t.name.node
             ));
@@ -174,7 +211,7 @@ impl TypeScriptTarget {
         for post in &t.postconditions {
             out.push_str(&format!(
                 "    if (!({})) {{ throw new Error(\"postcondition violated in '{}'\"); }}\n",
-                self.expr_to_ts(&post.node, &param_names, &field_names, false),
+                self.expr_to_ts(&post.node, &param_names, &field_names, field_types, false),
                 t.name.node
             ));
         }
@@ -202,6 +239,7 @@ impl TypeScriptTarget {
         expr: &Expr,
         params: &HashSet<String>,
         fields: &HashSet<String>,
+        field_types: &HashMap<String, Type>,
         in_old: bool,
     ) -> String {
         match expr {
@@ -215,22 +253,26 @@ impl TypeScriptTarget {
                 } else if in_old {
                     format!("_old_{}", name)
                 } else if fields.contains(name) {
-                    format!("this.{}", name)
+                    if matches!(field_types.get(name), Some(Type::Enum(_))) {
+                        format!("(this.{} as {})", name, self.type_to_ts(&field_types[name]))
+                    } else {
+                        format!("this.{}", name)
+                    }
                 } else {
                     name.clone()
                 }
             }
-            Expr::Old(inner) => self.expr_to_ts(&inner.node, params, fields, true),
+            Expr::Old(inner) => self.expr_to_ts(&inner.node, params, fields, field_types, true),
             Expr::UnaryOp { op, operand } => {
-                let inner = self.expr_to_ts(&operand.node, params, fields, in_old);
+                let inner = self.expr_to_ts(&operand.node, params, fields, field_types, in_old);
                 match op {
                     UnaryOp::Neg => format!("(-{})", inner),
                     UnaryOp::Not => format!("(!{})", inner),
                 }
             }
             Expr::BinaryOp { left, op, right } => {
-                let l = self.expr_to_ts(&left.node, params, fields, in_old);
-                let r = self.expr_to_ts(&right.node, params, fields, in_old);
+                let l = self.expr_to_ts(&left.node, params, fields, field_types, in_old);
+                let r = self.expr_to_ts(&right.node, params, fields, field_types, in_old);
                 let op_str = match op {
                     BinaryOp::Add => "+",
                     BinaryOp::Sub => "-",
@@ -253,27 +295,34 @@ impl TypeScriptTarget {
             Expr::FieldAccess { object, field } => {
                 format!(
                     "{}.{}",
-                    self.expr_to_ts(&object.node, params, fields, in_old),
+                    self.expr_to_ts(&object.node, params, fields, field_types, in_old),
                     field.node
                 )
             }
             Expr::IndexAccess { object, index } => {
                 format!(
                     "{}[{}]",
-                    self.expr_to_ts(&object.node, params, fields, in_old),
-                    self.expr_to_ts(&index.node, params, fields, in_old)
+                    self.expr_to_ts(&object.node, params, fields, field_types, in_old),
+                    self.expr_to_ts(&index.node, params, fields, field_types, in_old)
+                )
+            }
+            Expr::MapAccess { map, key } => {
+                format!(
+                    "({}.get({}) ?? 0)",
+                    self.expr_to_ts(&map.node, params, fields, field_types, in_old),
+                    self.expr_to_ts(&key.node, params, fields, field_types, in_old)
                 )
             }
             Expr::Forall { var, domain, body } => {
-                self.quantifier_to_ts(var, domain, body, params, fields, in_old, true)
+                self.quantifier_to_ts(var, domain, body, params, fields, field_types, in_old, true)
             }
             Expr::Exists { var, domain, body } => {
-                self.quantifier_to_ts(var, domain, body, params, fields, in_old, false)
+                self.quantifier_to_ts(var, domain, body, params, fields, field_types, in_old, false)
             }
             Expr::FnCall { name, args } => {
                 let arg_strs: Vec<String> = args
                     .iter()
-                    .map(|a| self.expr_to_ts(&a.node, params, fields, in_old))
+                    .map(|a| self.expr_to_ts(&a.node, params, fields, field_types, in_old))
                     .collect();
                 match name.node.as_str() {
                     "abs" => format!("Math.abs({})", arg_strs[0]),
@@ -291,6 +340,7 @@ impl TypeScriptTarget {
         stmt: &Statement,
         params: &HashSet<String>,
         fields: &HashSet<String>,
+        field_types: &HashMap<String, Type>,
     ) -> String {
         match stmt {
             Statement::Assign(assign) => {
@@ -302,7 +352,7 @@ impl TypeScriptTarget {
                 format!(
                     "this.{} = {}",
                     assign.target.node,
-                    self.expr_to_ts(&assign.value.node, params, fields, false)
+                    self.expr_to_ts(&assign.value.node, params, fields, field_types, false)
                 )
             }
             Statement::CompoundAssign { target, op, value } => {
@@ -316,7 +366,7 @@ impl TypeScriptTarget {
                     "this.{} {} {}",
                     target.node,
                     op_str,
-                    self.expr_to_ts(&value.node, params, fields, false)
+                    self.expr_to_ts(&value.node, params, fields, field_types, false)
                 )
             }
             Statement::If {
@@ -326,10 +376,10 @@ impl TypeScriptTarget {
             } => {
                 let mut out = format!(
                     "if ({}) {{\n",
-                    self.expr_to_ts(&condition.node, params, fields, false)
+                    self.expr_to_ts(&condition.node, params, fields, field_types, false)
                 );
                 for s in then_body {
-                    let stmt_code = self.stmt_to_ts(&s.node, params, fields);
+                    let stmt_code = self.stmt_to_ts(&s.node, params, fields, field_types);
                     if !stmt_code.is_empty() {
                         if self.is_block_statement(&s.node) {
                             out.push_str(&format!("      {}\n", stmt_code));
@@ -342,7 +392,7 @@ impl TypeScriptTarget {
                 if let Some(else_stmts) = else_body {
                     out.push_str(" else {\n");
                     for s in else_stmts {
-                        let stmt_code = self.stmt_to_ts(&s.node, params, fields);
+                        let stmt_code = self.stmt_to_ts(&s.node, params, fields, field_types);
                         if !stmt_code.is_empty() {
                             if self.is_block_statement(&s.node) {
                                 out.push_str(&format!("      {}\n", stmt_code));
@@ -360,12 +410,13 @@ impl TypeScriptTarget {
                 index,
                 value,
             } => {
-                format!(
-                    "this.{}[{}] = {}",
-                    target.node,
-                    self.expr_to_ts(&index.node, params, fields, false),
-                    self.expr_to_ts(&value.node, params, fields, false)
-                )
+                let index_s = self.expr_to_ts(&index.node, params, fields, field_types, false);
+                let value_s = self.expr_to_ts(&value.node, params, fields, field_types, false);
+                if matches!(field_types.get(&target.node), Some(Type::Map { .. })) {
+                    format!("this.{}.set({}, {})", target.node, index_s, value_s)
+                } else {
+                    format!("this.{}[{}] = {}", target.node, index_s, value_s)
+                }
             }
             Statement::IndexedCompoundAssign {
                 target,
@@ -374,34 +425,37 @@ impl TypeScriptTarget {
                 value,
             } => {
                 let op_str = match op {
-                    CompoundOp::Add => "+=",
-                    CompoundOp::Sub => "-=",
-                    CompoundOp::Mul => "*=",
-                    CompoundOp::Div => "/=",
+                    CompoundOp::Add => "+",
+                    CompoundOp::Sub => "-",
+                    CompoundOp::Mul => "*",
+                    CompoundOp::Div => "/",
                 };
-                format!(
-                    "this.{}[{}] {} {}",
-                    target.node,
-                    self.expr_to_ts(&index.node, params, fields, false),
-                    op_str,
-                    self.expr_to_ts(&value.node, params, fields, false)
-                )
+                let index_s = self.expr_to_ts(&index.node, params, fields, field_types, false);
+                let value_s = self.expr_to_ts(&value.node, params, fields, field_types, false);
+                if matches!(field_types.get(&target.node), Some(Type::Map { .. })) {
+                    format!(
+                        "this.{}.set({}, (this.{}.get({}) ?? 0) {} {})",
+                        target.node, index_s, target.node, index_s, op_str, value_s
+                    )
+                } else {
+                    format!("this.{}[{}] {}= {}", target.node, index_s, op_str, value_s)
+                }
             }
             Statement::Assert { condition } => {
                 format!(
                     "if (!{}) {{ throw new Error(\"assertion failed\") }}",
-                    self.expr_to_ts(&condition.node, params, fields, false)
+                    self.expr_to_ts(&condition.node, params, fields, field_types, false)
                 )
             }
             Statement::Let { name, value, .. } => {
                 format!(
                     "const {} = {}",
                     name.node,
-                    self.expr_to_ts(&value.node, params, fields, false)
+                    self.expr_to_ts(&value.node, params, fields, field_types, false)
                 )
             }
             Statement::Match { expr, arms } => {
-                let subject = self.expr_to_ts(&expr.node, params, fields, false);
+                let subject = self.expr_to_ts(&expr.node, params, fields, field_types, false);
                 let mut out = String::new();
                 for (idx, arm) in arms.iter().enumerate() {
                     let prefix = if idx == 0 { "if" } else { "else if" };
@@ -416,7 +470,7 @@ impl TypeScriptTarget {
                         out.push_str(&format!("{} ({}) {{\n", prefix, cond));
                     }
                     for s in &arm.body {
-                        let stmt_code = self.stmt_to_ts(&s.node, params, fields);
+                        let stmt_code = self.stmt_to_ts(&s.node, params, fields, field_types);
                         if !stmt_code.is_empty() {
                             if self.is_block_statement(&s.node) {
                                 out.push_str(&format!("      {}\n", stmt_code));
@@ -443,15 +497,16 @@ impl TypeScriptTarget {
         body: &crate::ast::span::Spanned<Expr>,
         params: &HashSet<String>,
         fields: &HashSet<String>,
+        field_types: &HashMap<String, Type>,
         in_old: bool,
         is_forall: bool,
     ) -> String {
         if let Expr::Range { start, end } = &domain.node {
-            let start_s = self.expr_to_ts(&start.node, params, fields, in_old);
-            let end_s = self.expr_to_ts(&end.node, params, fields, in_old);
+            let start_s = self.expr_to_ts(&start.node, params, fields, field_types, in_old);
+            let end_s = self.expr_to_ts(&end.node, params, fields, field_types, in_old);
             let mut local_params = params.clone();
             local_params.insert(var.node.clone());
-            let body_s = self.expr_to_ts(&body.node, &local_params, fields, in_old);
+            let body_s = self.expr_to_ts(&body.node, &local_params, fields, field_types, in_old);
 
             if is_forall {
                 format!(
@@ -480,6 +535,25 @@ impl TypeScriptTarget {
             MatchPattern::BoolLit(v) => format!("{} === {}", subject, v),
             MatchPattern::StringLit(v) => format!("{} === \"{}\"", subject, v),
             MatchPattern::Wildcard => "true".to_string(),
+        }
+    }
+
+    fn default_for_ts_type(&self, ty: &Type) -> Option<String> {
+        match ty {
+            Type::Array { element, size } => {
+                Some(format!("new Array({}).fill({})", size, self.zero_for_ts_type(element)))
+            }
+            Type::Map { .. } => Some("new Map()".to_string()),
+            _ => None,
+        }
+    }
+
+    fn zero_for_ts_type(&self, ty: &Type) -> String {
+        match ty {
+            Type::Int | Type::Real => "0".to_string(),
+            Type::Bool => "false".to_string(),
+            Type::String => "\"\"".to_string(),
+            _ => "undefined".to_string(),
         }
     }
 }

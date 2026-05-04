@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::nodes::*;
 use crate::ast::types::Type;
@@ -89,6 +89,11 @@ impl GoTarget {
 
     fn gen_state(&self, state: &StateDef) -> String {
         let mut out = String::new();
+        let field_types: HashMap<String, Type> = state
+            .fields
+            .iter()
+            .map(|f| (f.name.node.clone(), f.ty.node.clone()))
+            .collect();
 
         for c in &state.constants {
             out.push_str(&self.gen_const(c));
@@ -110,6 +115,8 @@ impl GoTarget {
         ));
         out.push_str(&format!("\ts := &{}{{}}\n", state.name.node));
         if let Some(init) = &state.init {
+            let assigned: HashSet<&str> =
+                init.assignments.iter().map(|a| a.target.node.as_str()).collect();
             for assign in &init.assignments {
                 out.push_str(&format!(
                     "\ts.{} = {}\n",
@@ -117,17 +124,43 @@ impl GoTarget {
                     self.expr_to_go(&assign.value.node, &HashSet::new(), &HashSet::new(), false)
                 ));
             }
+            for field in &state.fields {
+                if !assigned.contains(field.name.node.as_str()) {
+                    if let Some(default) = self.default_for_go_type(&field.ty.node) {
+                        out.push_str(&format!(
+                            "\ts.{} = {}\n",
+                            self.go_field_name(&field.name.node),
+                            default
+                        ));
+                    }
+                }
+            }
+        } else {
+            for field in &state.fields {
+                if let Some(default) = self.default_for_go_type(&field.ty.node) {
+                    out.push_str(&format!(
+                        "\ts.{} = {}\n",
+                        self.go_field_name(&field.name.node),
+                        default
+                    ));
+                }
+            }
         }
         out.push_str("\treturn s\n}\n\n");
 
         for transition in &state.transitions {
-            out.push_str(&self.gen_transition(state, transition));
+            out.push_str(&self.gen_transition(state, transition, &field_types));
         }
 
         out
     }
 
-    fn gen_transition(&self, state: &StateDef, t: &Transition) -> String {
+    fn gen_transition(
+        &self,
+        state: &StateDef,
+        t: &Transition,
+        field_types: &HashMap<String, Type>,
+    ) -> String {
         let params: Vec<String> = t
             .params
             .iter()
@@ -172,7 +205,7 @@ impl GoTarget {
         }
 
         for stmt in &t.body {
-            let stmt_code = self.stmt_to_go(&stmt.node, &params_set, &field_set);
+            let stmt_code = self.stmt_to_go(&stmt.node, &params_set, &field_set, field_types);
             if !stmt_code.is_empty() {
                 out.push_str(&format!("\t{}\n", stmt_code));
             }
@@ -317,6 +350,7 @@ impl GoTarget {
         stmt: &Statement,
         params: &HashSet<String>,
         fields: &HashSet<String>,
+        field_types: &HashMap<String, Type>,
     ) -> String {
         match stmt {
             Statement::Assign(assign) => {
@@ -349,12 +383,16 @@ impl GoTarget {
                 target,
                 index,
                 value,
-            } => format!(
-                "s.{}[{}] = {}",
-                self.go_field_name(&target.node),
-                self.expr_to_go(&index.node, params, fields, false),
-                self.expr_to_go(&value.node, params, fields, false)
-            ),
+            } => {
+                let target_name = self.go_field_name(&target.node);
+                let index_s = self.expr_to_go(&index.node, params, fields, false);
+                let value_s = self.expr_to_go(&value.node, params, fields, false);
+                if matches!(field_types.get(&target.node), Some(Type::Map { .. })) {
+                    format!("s.{}[{}] = {}", target_name, index_s, value_s)
+                } else {
+                    format!("s.{}[{}] = {}", target_name, index_s, value_s)
+                }
+            }
             Statement::IndexedCompoundAssign {
                 target,
                 index,
@@ -362,17 +400,17 @@ impl GoTarget {
                 value,
             } => {
                 let op_str = match op {
-                    CompoundOp::Add => "+=",
-                    CompoundOp::Sub => "-=",
-                    CompoundOp::Mul => "*=",
-                    CompoundOp::Div => "/=",
+                    CompoundOp::Add => "+",
+                    CompoundOp::Sub => "-",
+                    CompoundOp::Mul => "*",
+                    CompoundOp::Div => "/",
                 };
+                let target_name = self.go_field_name(&target.node);
+                let index_s = self.expr_to_go(&index.node, params, fields, false);
+                let value_s = self.expr_to_go(&value.node, params, fields, false);
                 format!(
-                    "s.{}[{}] {} {}",
-                    self.go_field_name(&target.node),
-                    self.expr_to_go(&index.node, params, fields, false),
-                    op_str,
-                    self.expr_to_go(&value.node, params, fields, false)
+                    "s.{}[{}] = s.{}[{}] {} {}",
+                    target_name, index_s, target_name, index_s, op_str, value_s
                 )
             }
             Statement::Assert { condition } => format!(
@@ -389,7 +427,7 @@ impl GoTarget {
                     self.expr_to_go(&condition.node, params, fields, false)
                 );
                 for s in then_body {
-                    let stmt_code = self.stmt_to_go(&s.node, params, fields);
+                    let stmt_code = self.stmt_to_go(&s.node, params, fields, field_types);
                     if !stmt_code.is_empty() {
                         out.push_str(&format!("\t\t{}\n", stmt_code));
                     }
@@ -399,7 +437,7 @@ impl GoTarget {
                 if let Some(else_stmts) = else_body {
                     out.push_str(" else {\n");
                     for s in else_stmts {
-                        let stmt_code = self.stmt_to_go(&s.node, params, fields);
+                        let stmt_code = self.stmt_to_go(&s.node, params, fields, field_types);
                         if !stmt_code.is_empty() {
                             out.push_str(&format!("\t\t{}\n", stmt_code));
                         }
@@ -410,9 +448,10 @@ impl GoTarget {
                 out
             }
             Statement::Let { name, value, .. } => format!(
-                "{} := {}",
+                "{} := {}\n\t_ = {}",
                 name.node,
-                self.expr_to_go(&value.node, params, fields, false)
+                self.expr_to_go(&value.node, params, fields, false),
+                name.node
             ),
             Statement::Match { expr, arms } => {
                 let subject = self.expr_to_go(&expr.node, params, fields, false);
@@ -426,7 +465,7 @@ impl GoTarget {
                         )),
                     }
                     for s in &arm.body {
-                        let stmt_code = self.stmt_to_go(&s.node, params, fields);
+                        let stmt_code = self.stmt_to_go(&s.node, params, fields, field_types);
                         if !stmt_code.is_empty() {
                             out.push_str(&format!("\t\t{}\n", stmt_code));
                         }
@@ -556,6 +595,17 @@ impl GoTarget {
         match chars.next() {
             Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
             None => String::new(),
+        }
+    }
+
+    fn default_for_go_type(&self, ty: &Type) -> Option<String> {
+        match ty {
+            Type::Map { key, value } => Some(format!(
+                "make(map[{}]{})",
+                self.type_to_go(key),
+                self.type_to_go(value)
+            )),
+            _ => None,
         }
     }
 

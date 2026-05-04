@@ -355,7 +355,10 @@ fn parse_preserves_assert_statement_order() {
         "second statement should be assert"
     );
     assert!(
-        matches!(transition.body[2].node, Statement::Assign(_) | Statement::CompoundAssign { .. }),
+        matches!(
+            transition.body[2].node,
+            Statement::Assign(_) | Statement::CompoundAssign { .. }
+        ),
         "third statement should be assignment/compound assignment"
     );
 }

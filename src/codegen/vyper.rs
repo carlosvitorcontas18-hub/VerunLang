@@ -270,7 +270,7 @@ impl VyperTarget {
                     _ => format!("{}({})", name.node, arg_strs.join(", ")),
                 }
             }
-            _ => "0".to_string()
+            _ => "0".to_string(),
         }
     }
 

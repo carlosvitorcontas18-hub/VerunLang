@@ -96,8 +96,11 @@ impl RustTarget {
         out.push_str(&format!("impl {} {{\n", state.name.node));
 
         if let Some(init) = &state.init {
-            let assigned: HashSet<&str> =
-                init.assignments.iter().map(|a| a.target.node.as_str()).collect();
+            let assigned: HashSet<&str> = init
+                .assignments
+                .iter()
+                .map(|a| a.target.node.as_str())
+                .collect();
             out.push_str("    pub fn new() -> Self {\n");
             out.push_str("        Self {\n");
             for assign in &init.assignments {

@@ -104,8 +104,11 @@ impl TypeScriptTarget {
 
         out.push_str("  constructor() {\n");
         if let Some(init) = &state.init {
-            let assigned: HashSet<&str> =
-                init.assignments.iter().map(|a| a.target.node.as_str()).collect();
+            let assigned: HashSet<&str> = init
+                .assignments
+                .iter()
+                .map(|a| a.target.node.as_str())
+                .collect();
             for assign in &init.assignments {
                 out.push_str(&format!(
                     "    this.{} = {};\n",
@@ -202,7 +205,13 @@ impl TypeScriptTarget {
                 .unwrap_or("invariant");
             out.push_str(&format!(
                 "    if (!({})) {{ throw new Error(\"invariant '{}' violated after '{}'\"); }}\n",
-                self.expr_to_ts(&inv.condition.node, &param_names, &field_names, field_types, false),
+                self.expr_to_ts(
+                    &inv.condition.node,
+                    &param_names,
+                    &field_names,
+                    field_types,
+                    false
+                ),
                 inv_name,
                 t.name.node
             ));
@@ -316,9 +325,16 @@ impl TypeScriptTarget {
             Expr::Forall { var, domain, body } => {
                 self.quantifier_to_ts(var, domain, body, params, fields, field_types, in_old, true)
             }
-            Expr::Exists { var, domain, body } => {
-                self.quantifier_to_ts(var, domain, body, params, fields, field_types, in_old, false)
-            }
+            Expr::Exists { var, domain, body } => self.quantifier_to_ts(
+                var,
+                domain,
+                body,
+                params,
+                fields,
+                field_types,
+                in_old,
+                false,
+            ),
             Expr::FnCall { name, args } => {
                 let arg_strs: Vec<String> = args
                     .iter()
@@ -541,9 +557,11 @@ impl TypeScriptTarget {
 
     fn default_for_ts_type(&self, ty: &Type) -> Option<String> {
         match ty {
-            Type::Array { element, size } => {
-                Some(format!("new Array({}).fill({})", size, self.zero_for_ts_type(element)))
-            }
+            Type::Array { element, size } => Some(format!(
+                "new Array({}).fill({})",
+                size,
+                self.zero_for_ts_type(element)
+            )),
             Type::Map { .. } => Some("new Map()".to_string()),
             _ => None,
         }

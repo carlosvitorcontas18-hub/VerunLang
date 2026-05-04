@@ -115,8 +115,11 @@ impl GoTarget {
         ));
         out.push_str(&format!("\ts := &{}{{}}\n", state.name.node));
         if let Some(init) = &state.init {
-            let assigned: HashSet<&str> =
-                init.assignments.iter().map(|a| a.target.node.as_str()).collect();
+            let assigned: HashSet<&str> = init
+                .assignments
+                .iter()
+                .map(|a| a.target.node.as_str())
+                .collect();
             for assign in &init.assignments {
                 out.push_str(&format!(
                     "\ts.{} = {}\n",

@@ -24,7 +24,10 @@ impl CodeTarget for JavaTarget {
             .items
             .iter()
             .filter_map(|i| match &i.node {
-                Item::TypeDef(t) => t.alias.as_ref().map(|alias| (t.name.node.clone(), alias.node.clone())),
+                Item::TypeDef(t) => t
+                    .alias
+                    .as_ref()
+                    .map(|alias| (t.name.node.clone(), alias.node.clone())),
                 _ => None,
             })
             .collect();
@@ -148,8 +151,11 @@ impl JavaTarget {
 
         out.push_str(&format!("    public {}() {{\n", state.name.node));
         if let Some(init) = &state.init {
-            let assigned: HashSet<&str> =
-                init.assignments.iter().map(|a| a.target.node.as_str()).collect();
+            let assigned: HashSet<&str> = init
+                .assignments
+                .iter()
+                .map(|a| a.target.node.as_str())
+                .collect();
             for assign in &init.assignments {
                 out.push_str(&format!(
                     "        this.{} = {};\n",
@@ -165,8 +171,7 @@ impl JavaTarget {
             }
             for field in &state.fields {
                 if !assigned.contains(field.name.node.as_str())
-                    && let Some(default) =
-                        self.java_default_for_type(&field.ty.node, type_aliases)
+                    && let Some(default) = self.java_default_for_type(&field.ty.node, type_aliases)
                 {
                     out.push_str(&format!(
                         "        this.{} = {};\n",
@@ -178,7 +183,13 @@ impl JavaTarget {
         out.push_str("    }\n\n");
 
         for transition in &state.transitions {
-            out.push_str(&self.gen_transition(state, transition, top_consts, type_aliases, &field_types));
+            out.push_str(&self.gen_transition(
+                state,
+                transition,
+                top_consts,
+                type_aliases,
+                &field_types,
+            ));
         }
 
         out.push_str("}\n\n");
@@ -196,7 +207,13 @@ impl JavaTarget {
         let params: Vec<String> = t
             .params
             .iter()
-            .map(|p| format!("{} {}", self.type_to_java(&p.ty.node, type_aliases), p.name.node))
+            .map(|p| {
+                format!(
+                    "{} {}",
+                    self.type_to_java(&p.ty.node, type_aliases),
+                    p.name.node
+                )
+            })
             .collect();
         let params_set: HashSet<String> = t.params.iter().map(|p| p.name.node.clone()).collect();
         let fields_set: HashSet<String> =
@@ -279,7 +296,9 @@ impl JavaTarget {
             Type::Bool => "boolean".to_string(),
             Type::String => "String".to_string(),
             Type::Named(name) | Type::Enum(name) => name.clone(),
-            Type::Array { element, size: _ } => format!("{}[]", self.type_to_java(element, type_aliases)),
+            Type::Array { element, size: _ } => {
+                format!("{}[]", self.type_to_java(element, type_aliases))
+            }
             Type::Map { key, value } => format!(
                 "java.util.Map<{}, {}>",
                 self.boxed_java_type(key, type_aliases),
@@ -295,7 +314,9 @@ impl JavaTarget {
             Type::Bool => "Boolean".to_string(),
             Type::String => "String".to_string(),
             Type::Named(name) | Type::Enum(name) => name.clone(),
-            Type::Array { element, .. } => format!("{}[]", self.boxed_java_type(element, type_aliases)),
+            Type::Array { element, .. } => {
+                format!("{}[]", self.boxed_java_type(element, type_aliases))
+            }
             Type::Map { key, value } => format!(
                 "java.util.Map<{}, {}>",
                 self.boxed_java_type(key, type_aliases),
@@ -369,7 +390,7 @@ impl JavaTarget {
             }
             Expr::IndexAccess { object, index } => {
                 format!(
-                    "{}[(int)({})]" ,
+                    "{}[(int)({})]",
                     self.expr_to_java(&object.node, params, fields, top_consts, in_old),
                     self.expr_to_java(&index.node, params, fields, top_consts, in_old)
                 )
@@ -384,9 +405,8 @@ impl JavaTarget {
             Expr::Forall { var, domain, body } => {
                 self.quantifier_to_java(var, domain, body, params, fields, top_consts, in_old, true)
             }
-            Expr::Exists { var, domain, body } => {
-                self.quantifier_to_java(var, domain, body, params, fields, top_consts, in_old, false)
-            }
+            Expr::Exists { var, domain, body } => self
+                .quantifier_to_java(var, domain, body, params, fields, top_consts, in_old, false),
             Expr::FnCall { name, args } => {
                 let arg_strs: Vec<String> = args
                     .iter()
@@ -466,7 +486,10 @@ impl JavaTarget {
                 };
                 let index_s = self.expr_to_java(&index.node, params, fields, top_consts, false);
                 let value_s = self.expr_to_java(&value.node, params, fields, top_consts, false);
-                if let Some(Type::Map { value: map_value, .. }) = field_types.get(&target.node) {
+                if let Some(Type::Map {
+                    value: map_value, ..
+                }) = field_types.get(&target.node)
+                {
                     let default_s = self.java_zero_value(map_value, type_aliases);
                     format!(
                         "this.{}.put({}, this.{}.getOrDefault({}, {}) {} {})",
@@ -624,9 +647,11 @@ impl JavaTarget {
         type_aliases: &HashMap<String, Type>,
     ) -> Option<String> {
         match self.resolve_java_alias(ty, type_aliases) {
-            Type::Array { element, size } => {
-                Some(format!("new {}[{}]", self.java_primitive_element(element, type_aliases), size))
-            }
+            Type::Array { element, size } => Some(format!(
+                "new {}[{}]",
+                self.java_primitive_element(element, type_aliases),
+                size
+            )),
             Type::Map { key, value } => Some(format!(
                 "new java.util.HashMap<{}, {}>()",
                 self.boxed_java_type(key, type_aliases),

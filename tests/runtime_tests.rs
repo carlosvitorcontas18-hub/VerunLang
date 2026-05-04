@@ -333,7 +333,11 @@ fn runtime_initializes_collections_not_set_in_init() {
             let mut engine = Engine::new(&state.name.node);
             engine.initialize_state(state).unwrap();
 
-            let transition = state.transitions.iter().find(|t| t.name.node == "put").unwrap();
+            let transition = state
+                .transitions
+                .iter()
+                .find(|t| t.name.node == "put")
+                .unwrap();
             let mut args = HashMap::new();
             args.insert("v".to_string(), Value::Int(7));
 
@@ -389,7 +393,11 @@ fn runtime_match_accepts_enum_string_argument() {
             let mut engine = Engine::new(&state.name.node);
             engine.initialize_state(state).unwrap();
 
-            let transition = state.transitions.iter().find(|t| t.name.node == "set").unwrap();
+            let transition = state
+                .transitions
+                .iter()
+                .find(|t| t.name.node == "set")
+                .unwrap();
             let mut args = HashMap::new();
             args.insert("next".to_string(), Value::String("Side::Sell".to_string()));
 

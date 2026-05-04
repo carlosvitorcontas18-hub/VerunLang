@@ -27,7 +27,9 @@ impl CodeTarget for CTarget {
         out.push_str(
             "static inline int64_t verun_max(int64_t a, int64_t b) { return a > b ? a : b; }\n\n",
         );
-        out.push_str("typedef struct { int64_t key; int64_t value; bool used; } VerunMapI64I64Entry;\n");
+        out.push_str(
+            "typedef struct { int64_t key; int64_t value; bool used; } VerunMapI64I64Entry;\n",
+        );
         out.push_str("typedef struct { VerunMapI64I64Entry* entries; size_t len; size_t cap; } VerunMapI64I64;\n");
         out.push_str("static inline void verun_map_i64_i64_init(VerunMapI64I64* map) { map->entries = NULL; map->len = 0; map->cap = 0; }\n");
         out.push_str("static inline int64_t verun_map_i64_i64_get(const VerunMapI64I64* map, int64_t key) { for (size_t i = 0; i < map->len; ++i) { if (map->entries[i].used && map->entries[i].key == key) return map->entries[i].value; } return 0; }\n");
@@ -86,7 +88,10 @@ impl CTarget {
         }
         let mut out = format!("typedef struct {} {{\n", t.name.node);
         for field in &t.fields {
-            out.push_str(&format!("    {};\n", self.field_decl_to_c(&field.name.node, &field.ty.node)));
+            out.push_str(&format!(
+                "    {};\n",
+                self.field_decl_to_c(&field.name.node, &field.ty.node)
+            ));
         }
         out.push_str(&format!("}} {};\n\n", t.name.node));
         out
@@ -106,7 +111,10 @@ impl CTarget {
 
         out.push_str(&format!("typedef struct {} {{\n", s.name.node));
         for field in &s.fields {
-            out.push_str(&format!("    {};\n", self.field_decl_to_c(&field.name.node, &field.ty.node)));
+            out.push_str(&format!(
+                "    {};\n",
+                self.field_decl_to_c(&field.name.node, &field.ty.node)
+            ));
         }
         out.push_str(&format!("}} {};\n\n", s.name.node));
 
@@ -116,8 +124,11 @@ impl CTarget {
             s.name.node
         ));
         if let Some(init) = &s.init {
-            let assigned: HashSet<&str> =
-                init.assignments.iter().map(|a| a.target.node.as_str()).collect();
+            let assigned: HashSet<&str> = init
+                .assignments
+                .iter()
+                .map(|a| a.target.node.as_str())
+                .collect();
             for assign in &init.assignments {
                 out.push_str(&format!(
                     "    self->{} = {};\n",
@@ -135,7 +146,9 @@ impl CTarget {
             }
         } else {
             for field in &s.fields {
-                if let Some(default_stmt) = self.default_init_stmt_c(&field.name.node, &field.ty.node) {
+                if let Some(default_stmt) =
+                    self.default_init_stmt_c(&field.name.node, &field.ty.node)
+                {
                     out.push_str(&format!("    {}\n", default_stmt));
                 }
             }
@@ -180,7 +193,10 @@ impl CTarget {
             ));
         }
 
-        if t.postconditions.iter().any(|p| self.expr_contains_old(&p.node)) {
+        if t.postconditions
+            .iter()
+            .any(|p| self.expr_contains_old(&p.node))
+        {
             let old_fields: HashSet<String> = t
                 .postconditions
                 .iter()
@@ -378,7 +394,10 @@ impl CTarget {
                 let index_s = self.expr_to_c(&index.node, params, fields, false);
                 let value_s = self.expr_to_c(&value.node, params, fields, false);
                 if matches!(field_types.get(&target.node), Some(Type::Map { .. })) {
-                    format!("verun_map_i64_i64_put(&self->{}, {}, {})", target.node, index_s, value_s)
+                    format!(
+                        "verun_map_i64_i64_put(&self->{}, {}, {})",
+                        target.node, index_s, value_s
+                    )
                 } else {
                     format!("self->{}[{}] = {}", target.node, index_s, value_s)
                 }
@@ -549,7 +568,9 @@ impl CTarget {
 
     fn default_init_stmt_c(&self, name: &str, ty: &Type) -> Option<String> {
         match ty {
-            Type::Map { key, value } if matches!(key.as_ref(), Type::Int) && matches!(value.as_ref(), Type::Int) => {
+            Type::Map { key, value }
+                if matches!(key.as_ref(), Type::Int) && matches!(value.as_ref(), Type::Int) =>
+            {
                 Some(format!("verun_map_i64_i64_init(&self->{}) ;", name))
             }
             _ => None,

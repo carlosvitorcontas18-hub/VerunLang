@@ -376,13 +376,7 @@ impl<'ctx> Verifier<'ctx> {
         self.assert_param_refinements(&transition.params, &all_vars, &session);
 
         self.encode_transition_body(
-            state,
-            transition,
-            &pre_vars,
-            &post_vars,
-            &session,
-            &all_vars,
-            constants,
+            state, transition, &pre_vars, &post_vars, &session, &all_vars, constants,
         );
 
         let mut post_eval_vars = post_vars.clone();
@@ -551,13 +545,7 @@ impl<'ctx> Verifier<'ctx> {
         self.assert_param_refinements(&transition.params, &all_vars, &session);
 
         self.encode_transition_body(
-            state,
-            transition,
-            &pre_vars,
-            &post_vars,
-            &session,
-            &all_vars,
-            constants,
+            state, transition, &pre_vars, &post_vars, &session, &all_vars, constants,
         );
 
         let mut post_eval_vars = all_vars.clone();

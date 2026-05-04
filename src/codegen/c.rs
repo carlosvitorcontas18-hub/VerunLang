@@ -126,10 +126,11 @@ impl CTarget {
                 ));
             }
             for field in &s.fields {
-                if !assigned.contains(field.name.node.as_str()) {
-                    if let Some(default_stmt) = self.default_init_stmt_c(&field.name.node, &field.ty.node) {
-                        out.push_str(&format!("    {}\n", default_stmt));
-                    }
+                if !assigned.contains(field.name.node.as_str())
+                    && let Some(default_stmt) =
+                        self.default_init_stmt_c(&field.name.node, &field.ty.node)
+                {
+                    out.push_str(&format!("    {}\n", default_stmt));
                 }
             }
         } else {
@@ -475,6 +476,7 @@ impl CTarget {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn quantifier_to_c(
         &self,
         var: &crate::ast::span::Spanned<String>,

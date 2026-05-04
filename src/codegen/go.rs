@@ -125,14 +125,14 @@ impl GoTarget {
                 ));
             }
             for field in &state.fields {
-                if !assigned.contains(field.name.node.as_str()) {
-                    if let Some(default) = self.default_for_go_type(&field.ty.node) {
-                        out.push_str(&format!(
-                            "\ts.{} = {}\n",
-                            self.go_field_name(&field.name.node),
-                            default
-                        ));
-                    }
+                if !assigned.contains(field.name.node.as_str())
+                    && let Some(default) = self.default_for_go_type(&field.ty.node)
+                {
+                    out.push_str(&format!(
+                        "\ts.{} = {}\n",
+                        self.go_field_name(&field.name.node),
+                        default
+                    ));
                 }
             }
         } else {
@@ -387,11 +387,8 @@ impl GoTarget {
                 let target_name = self.go_field_name(&target.node);
                 let index_s = self.expr_to_go(&index.node, params, fields, false);
                 let value_s = self.expr_to_go(&value.node, params, fields, false);
-                if matches!(field_types.get(&target.node), Some(Type::Map { .. })) {
-                    format!("s.{}[{}] = {}", target_name, index_s, value_s)
-                } else {
-                    format!("s.{}[{}] = {}", target_name, index_s, value_s)
-                }
+                let _ = field_types;
+                format!("s.{}[{}] = {}", target_name, index_s, value_s)
             }
             Statement::IndexedCompoundAssign {
                 target,
@@ -490,6 +487,7 @@ impl GoTarget {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn quantifier_to_go(
         &self,
         var: &crate::ast::span::Spanned<String>,

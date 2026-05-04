@@ -164,13 +164,14 @@ impl JavaTarget {
                 ));
             }
             for field in &state.fields {
-                if !assigned.contains(field.name.node.as_str()) {
-                    if let Some(default) = self.java_default_for_type(&field.ty.node, type_aliases) {
-                        out.push_str(&format!(
-                            "        this.{} = {};\n",
-                            field.name.node, default
-                        ));
-                    }
+                if !assigned.contains(field.name.node.as_str())
+                    && let Some(default) =
+                        self.java_default_for_type(&field.ty.node, type_aliases)
+                {
+                    out.push_str(&format!(
+                        "        this.{} = {};\n",
+                        field.name.node, default
+                    ));
                 }
             }
         }
@@ -580,6 +581,7 @@ impl JavaTarget {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn quantifier_to_java(
         &self,
         var: &crate::ast::span::Spanned<String>,

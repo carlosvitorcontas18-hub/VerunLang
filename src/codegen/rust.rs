@@ -492,6 +492,7 @@ impl RustTarget {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn quantifier_to_rust(
         &self,
         var: &crate::ast::span::Spanned<String>,

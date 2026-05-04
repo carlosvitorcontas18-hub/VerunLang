@@ -728,6 +728,7 @@ impl<'ctx> Verifier<'ctx> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn encode_transition_body(
         &self,
         state: &StateDef,

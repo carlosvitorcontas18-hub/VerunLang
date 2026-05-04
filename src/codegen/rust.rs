@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::nodes::*;
 use crate::ast::types::Type;
@@ -55,6 +55,13 @@ impl RustTarget {
     }
 
     fn gen_type_def(&self, t: &crate::ast::types::TypeDef) -> String {
+        if let Some(alias_ty) = &t.alias {
+            return format!(
+                "pub type {} = {};\n\n",
+                t.name.node,
+                self.type_to_rust(&alias_ty.node)
+            );
+        }
         let mut out = "#[derive(Debug, Clone)]\n".to_string();
         out.push_str(&format!("pub struct {} {{\n", t.name.node));
         for field in &t.fields {
@@ -89,6 +96,8 @@ impl RustTarget {
         out.push_str(&format!("impl {} {{\n", state.name.node));
 
         if let Some(init) = &state.init {
+            let assigned: HashSet<&str> =
+                init.assignments.iter().map(|a| a.target.node.as_str()).collect();
             out.push_str("    pub fn new() -> Self {\n");
             out.push_str("        Self {\n");
             for assign in &init.assignments {
@@ -98,19 +107,39 @@ impl RustTarget {
                     self.expr_to_rust(&assign.value.node, &HashSet::new(), &HashSet::new(), false)
                 ));
             }
+            for field in &state.fields {
+                if !assigned.contains(field.name.node.as_str()) {
+                    out.push_str(&format!(
+                        "            {}: {},\n",
+                        field.name.node,
+                        self.default_for_type(&field.ty.node)
+                    ));
+                }
+            }
             out.push_str("        }\n");
             out.push_str("    }\n\n");
         }
 
+        let field_types: HashMap<String, Type> = state
+            .fields
+            .iter()
+            .map(|f| (f.name.node.clone(), f.ty.node.clone()))
+            .collect();
+
         for transition in &state.transitions {
-            out.push_str(&self.gen_transition(transition, state));
+            out.push_str(&self.gen_transition(transition, state, &field_types));
         }
 
         out.push_str("}\n\n");
         out
     }
 
-    fn gen_transition(&self, t: &Transition, state: &StateDef) -> String {
+    fn gen_transition(
+        &self,
+        t: &Transition,
+        state: &StateDef,
+        field_types: &HashMap<String, Type>,
+    ) -> String {
         let mut out = String::new();
 
         let param_names: HashSet<String> = t.params.iter().map(|p| p.name.node.clone()).collect();
@@ -151,7 +180,7 @@ impl RustTarget {
         }
 
         for stmt in &t.body {
-            let stmt_code = self.stmt_to_rust(&stmt.node, &param_names, &field_names);
+            let stmt_code = self.stmt_to_rust(&stmt.node, &param_names, &field_names, field_types);
             if !stmt_code.is_empty() {
                 out.push_str(&format!("        {};\n", stmt_code));
             }
@@ -267,10 +296,23 @@ impl RustTarget {
             }
             Expr::IndexAccess { object, index } => {
                 format!(
-                    "{}[{}]",
+                    "{}[({}) as usize]",
                     self.expr_to_rust(&object.node, params, fields, in_old),
                     self.expr_to_rust(&index.node, params, fields, in_old)
                 )
+            }
+            Expr::MapAccess { map, key } => {
+                format!(
+                    "{}[&{}]",
+                    self.expr_to_rust(&map.node, params, fields, in_old),
+                    self.expr_to_rust(&key.node, params, fields, in_old)
+                )
+            }
+            Expr::Forall { var, domain, body } => {
+                self.quantifier_to_rust(var, domain, body, params, fields, in_old, true)
+            }
+            Expr::Exists { var, domain, body } => {
+                self.quantifier_to_rust(var, domain, body, params, fields, in_old, false)
             }
             Expr::FnCall { name, args } => {
                 let arg_strs: Vec<String> = args
@@ -293,6 +335,7 @@ impl RustTarget {
         stmt: &Statement,
         params: &HashSet<String>,
         fields: &HashSet<String>,
+        field_types: &HashMap<String, Type>,
     ) -> String {
         match stmt {
             Statement::Assign(assign) => {
@@ -334,7 +377,7 @@ impl RustTarget {
                 ));
                 let mut out = format!("if {} {{\n", cond);
                 for s in then_body {
-                    let stmt_code = self.stmt_to_rust(&s.node, params, fields);
+                    let stmt_code = self.stmt_to_rust(&s.node, params, fields, field_types);
                     if !stmt_code.is_empty() {
                         out.push_str(&format!("            {};\n", stmt_code));
                     }
@@ -343,7 +386,7 @@ impl RustTarget {
                 if let Some(else_stmts) = else_body {
                     out.push_str(" else {\n");
                     for s in else_stmts {
-                        let stmt_code = self.stmt_to_rust(&s.node, params, fields);
+                        let stmt_code = self.stmt_to_rust(&s.node, params, fields, field_types);
                         if !stmt_code.is_empty() {
                             out.push_str(&format!("            {};\n", stmt_code));
                         }
@@ -357,12 +400,13 @@ impl RustTarget {
                 index,
                 value,
             } => {
-                format!(
-                    "self.{}[{}] = {}",
-                    target.node,
-                    self.expr_to_rust(&index.node, params, fields, false),
-                    self.expr_to_rust(&value.node, params, fields, false)
-                )
+                let idx_s = self.expr_to_rust(&index.node, params, fields, false);
+                let val_s = self.expr_to_rust(&value.node, params, fields, false);
+                if matches!(field_types.get(&target.node), Some(Type::Map { .. })) {
+                    format!("self.{}.insert({}, {})", target.node, idx_s, val_s)
+                } else {
+                    format!("self.{}[({}) as usize] = {}", target.node, idx_s, val_s)
+                }
             }
             Statement::IndexedCompoundAssign {
                 target,
@@ -370,19 +414,25 @@ impl RustTarget {
                 op,
                 value,
             } => {
+                let idx_s = self.expr_to_rust(&index.node, params, fields, false);
+                let val_s = self.expr_to_rust(&value.node, params, fields, false);
                 let op_str = match op {
-                    CompoundOp::Add => "+=",
-                    CompoundOp::Sub => "-=",
-                    CompoundOp::Mul => "*=",
-                    CompoundOp::Div => "/=",
+                    CompoundOp::Add => "+",
+                    CompoundOp::Sub => "-",
+                    CompoundOp::Mul => "*",
+                    CompoundOp::Div => "/",
                 };
-                format!(
-                    "self.{}[{}] {} {}",
-                    target.node,
-                    self.expr_to_rust(&index.node, params, fields, false),
-                    op_str,
-                    self.expr_to_rust(&value.node, params, fields, false)
-                )
+                if matches!(field_types.get(&target.node), Some(Type::Map { .. })) {
+                    format!(
+                        "{{ let __e = self.{}.entry({}).or_insert(0); *__e = *__e {} {}; }}",
+                        target.node, idx_s, op_str, val_s
+                    )
+                } else {
+                    format!(
+                        "self.{}[({}) as usize] {}= {}",
+                        target.node, idx_s, op_str, val_s
+                    )
+                }
             }
             Statement::Assert { condition } => {
                 format!(
@@ -417,7 +467,7 @@ impl RustTarget {
                         self.match_pattern_to_rust(&arm.pattern.node)
                     ));
                     for s in &arm.body {
-                        let stmt_code = self.stmt_to_rust(&s.node, params, fields);
+                        let stmt_code = self.stmt_to_rust(&s.node, params, fields, field_types);
                         if !stmt_code.is_empty() {
                             out.push_str(&format!("                {};\n", stmt_code));
                         }
@@ -439,6 +489,61 @@ impl RustTarget {
             MatchPattern::BoolLit(v) => format!("{}", v),
             MatchPattern::StringLit(v) => format!("\"{}\"", v),
             MatchPattern::Wildcard => "_".to_string(),
+        }
+    }
+
+    fn quantifier_to_rust(
+        &self,
+        var: &crate::ast::span::Spanned<String>,
+        domain: &crate::ast::span::Spanned<Expr>,
+        body: &crate::ast::span::Spanned<Expr>,
+        params: &HashSet<String>,
+        fields: &HashSet<String>,
+        in_old: bool,
+        is_forall: bool,
+    ) -> String {
+        if let Expr::Range { start, end } = &domain.node {
+            let start_s = self.expr_to_rust(&start.node, params, fields, in_old);
+            let end_s = self.expr_to_rust(&end.node, params, fields, in_old);
+            let mut local_params = params.clone();
+            local_params.insert(var.node.clone());
+            let body_s = self.expr_to_rust(&body.node, &local_params, fields, in_old);
+
+            if is_forall {
+                format!(
+                    "({{ let mut __verun_ok = true; for {} in ({})..({}) {{ if !({}) {{ __verun_ok = false; break; }} }} __verun_ok }})",
+                    var.node, start_s, end_s, body_s
+                )
+            } else {
+                format!(
+                    "({{ let mut __verun_ok = false; for {} in ({})..({}) {{ if ({}) {{ __verun_ok = true; break; }} }} __verun_ok }})",
+                    var.node, start_s, end_s, body_s
+                )
+            }
+        } else if is_forall {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        }
+    }
+
+    fn default_for_type(&self, ty: &Type) -> String {
+        match ty {
+            Type::Int => "0i64".to_string(),
+            Type::Real => "0.0f64".to_string(),
+            Type::Bool => "false".to_string(),
+            Type::String => "String::new()".to_string(),
+            Type::Array { element, size } => {
+                let elem_default = match element.as_ref() {
+                    Type::Int => "0i64",
+                    Type::Real => "0.0f64",
+                    Type::Bool => "false",
+                    _ => "Default::default()",
+                };
+                format!("[{}; {}]", elem_default, size)
+            }
+            Type::Map { .. } => "std::collections::HashMap::new()".to_string(),
+            Type::Named(_) | Type::Enum(_) => "Default::default()".to_string(),
         }
     }
 

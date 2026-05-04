@@ -67,6 +67,13 @@ impl GoTarget {
     }
 
     fn gen_type_def(&self, t: &crate::ast::types::TypeDef) -> String {
+        if let Some(alias_ty) = &t.alias {
+            return format!(
+                "type {} = {}\n\n",
+                t.name.node,
+                self.type_to_go(&alias_ty.node)
+            );
+        }
         let mut out = String::new();
         out.push_str(&format!("type {} struct {{\n", t.name.node));
         for field in &t.fields {
@@ -148,12 +155,19 @@ impl GoTarget {
             .iter()
             .any(|p| self.expr_contains_old(&p.node))
         {
+            let old_fields: HashSet<String> = t
+                .postconditions
+                .iter()
+                .flat_map(|p| self.fields_in_old(&p.node, &field_set))
+                .collect();
             for field in &state.fields {
-                out.push_str(&format!(
-                    "\t_old_{} := s.{}\n",
-                    field.name.node,
-                    self.go_field_name(&field.name.node)
-                ));
+                if old_fields.contains(&field.name.node) {
+                    out.push_str(&format!(
+                        "\t_old_{} := s.{}\n",
+                        field.name.node,
+                        self.go_field_name(&field.name.node)
+                    ));
+                }
             }
         }
 
@@ -275,6 +289,12 @@ impl GoTarget {
                     self.expr_to_go(&map.node, params, fields, in_old),
                     self.expr_to_go(&key.node, params, fields, in_old)
                 )
+            }
+            Expr::Forall { var, domain, body } => {
+                self.quantifier_to_go(var, domain, body, params, fields, in_old, true)
+            }
+            Expr::Exists { var, domain, body } => {
+                self.quantifier_to_go(var, domain, body, params, fields, in_old, false)
             }
             Expr::FnCall { name, args } => {
                 let arg_strs: Vec<String> = args
@@ -428,6 +448,106 @@ impl GoTarget {
             MatchPattern::BoolLit(v) => v.to_string(),
             MatchPattern::StringLit(v) => format!("\"{}\"", v),
             MatchPattern::Wildcard => "default".to_string(),
+        }
+    }
+
+    fn quantifier_to_go(
+        &self,
+        var: &crate::ast::span::Spanned<String>,
+        domain: &crate::ast::span::Spanned<Expr>,
+        body: &crate::ast::span::Spanned<Expr>,
+        params: &HashSet<String>,
+        fields: &HashSet<String>,
+        in_old: bool,
+        is_forall: bool,
+    ) -> String {
+        if let Expr::Range { start, end } = &domain.node {
+            let start_s = self.expr_to_go(&start.node, params, fields, in_old);
+            let end_s = self.expr_to_go(&end.node, params, fields, in_old);
+            let mut local_params = params.clone();
+            local_params.insert(var.node.clone());
+            let body_s = self.expr_to_go(&body.node, &local_params, fields, in_old);
+
+            if is_forall {
+                format!(
+                    "func() bool {{ for {} := int64({}); {} < int64({}); {}++ {{ if !({}) {{ return false }} }}; return true }}()",
+                    var.node, start_s, var.node, end_s, var.node, body_s
+                )
+            } else {
+                format!(
+                    "func() bool {{ for {} := int64({}); {} < int64({}); {}++ {{ if ({}) {{ return true }} }}; return false }}()",
+                    var.node, start_s, var.node, end_s, var.node, body_s
+                )
+            }
+        } else if is_forall {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        }
+    }
+
+    fn fields_in_old(&self, expr: &Expr, field_set: &HashSet<String>) -> HashSet<String> {
+        match expr {
+            Expr::Old(inner) => {
+                let mut set = HashSet::new();
+                self.collect_field_idents(&inner.node, field_set, &mut set);
+                set
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                let mut s = self.fields_in_old(&left.node, field_set);
+                s.extend(self.fields_in_old(&right.node, field_set));
+                s
+            }
+            Expr::UnaryOp { operand, .. } => self.fields_in_old(&operand.node, field_set),
+            Expr::FnCall { args, .. } => args
+                .iter()
+                .flat_map(|a| self.fields_in_old(&a.node, field_set))
+                .collect(),
+            Expr::FieldAccess { object, .. } => self.fields_in_old(&object.node, field_set),
+            Expr::IndexAccess { object, index } => {
+                let mut s = self.fields_in_old(&object.node, field_set);
+                s.extend(self.fields_in_old(&index.node, field_set));
+                s
+            }
+            Expr::MapAccess { map, key } => {
+                let mut s = self.fields_in_old(&map.node, field_set);
+                s.extend(self.fields_in_old(&key.node, field_set));
+                s
+            }
+            _ => HashSet::new(),
+        }
+    }
+
+    fn collect_field_idents(
+        &self,
+        expr: &Expr,
+        field_set: &HashSet<String>,
+        result: &mut HashSet<String>,
+    ) {
+        match expr {
+            Expr::Ident(name) if field_set.contains(name) => {
+                result.insert(name.clone());
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.collect_field_idents(&left.node, field_set, result);
+                self.collect_field_idents(&right.node, field_set, result);
+            }
+            Expr::UnaryOp { operand, .. } => {
+                self.collect_field_idents(&operand.node, field_set, result);
+            }
+            Expr::IndexAccess { object, index } => {
+                self.collect_field_idents(&object.node, field_set, result);
+                self.collect_field_idents(&index.node, field_set, result);
+            }
+            Expr::FieldAccess { object, .. } => {
+                self.collect_field_idents(&object.node, field_set, result);
+            }
+            Expr::FnCall { args, .. } => {
+                for a in args {
+                    self.collect_field_idents(&a.node, field_set, result);
+                }
+            }
+            _ => {}
         }
     }
 

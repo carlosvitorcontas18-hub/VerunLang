@@ -71,8 +71,13 @@ impl CTarget {
         out
     }
 
-    fn gen_type_def(&self, t: &crate::ast::types::TypeDef) -> String {
-        let mut out = format!("typedef struct {} {{\n", t.name.node);
+    fn gen_type_def(&self, t: &crate::ast::types::TypeDef) -> String {        if let Some(alias_ty) = &t.alias {
+            return format!(
+                "typedef {} {};\n\n",
+                self.type_to_c(&alias_ty.node),
+                t.name.node
+            );
+        }        let mut out = format!("typedef struct {} {{\n", t.name.node);
         for field in &t.fields {
             out.push_str(&format!(
                 "    {} {};\n",
@@ -260,6 +265,12 @@ impl CTarget {
                     self.expr_to_c(&index.node, params, fields, in_old)
                 )
             }
+            Expr::Forall { var, domain, body } => {
+                self.quantifier_to_c(var, domain, body, params, fields, in_old, true)
+            }
+            Expr::Exists { var, domain, body } => {
+                self.quantifier_to_c(var, domain, body, params, fields, in_old, false)
+            }
             Expr::FnCall { name, args } => {
                 let arg_strs: Vec<String> = args
                     .iter()
@@ -399,6 +410,41 @@ impl CTarget {
                 out.push_str("    }");
                 out
             }
+        }
+    }
+
+    fn quantifier_to_c(
+        &self,
+        var: &crate::ast::span::Spanned<String>,
+        domain: &crate::ast::span::Spanned<Expr>,
+        body: &crate::ast::span::Spanned<Expr>,
+        params: &HashSet<String>,
+        fields: &HashSet<String>,
+        in_old: bool,
+        is_forall: bool,
+    ) -> String {
+        if let Expr::Range { start, end } = &domain.node {
+            let start_s = self.expr_to_c(&start.node, params, fields, in_old);
+            let end_s = self.expr_to_c(&end.node, params, fields, in_old);
+            let mut local_params = params.clone();
+            local_params.insert(var.node.clone());
+            let body_s = self.expr_to_c(&body.node, &local_params, fields, in_old);
+
+            if is_forall {
+                format!(
+                    "({{ bool __verun_ok = true; for (int64_t {} = ({}); {} < ({}); ++{}) {{ if (!({})) {{ __verun_ok = false; break; }} }} __verun_ok; }})",
+                    var.node, start_s, var.node, end_s, var.node, body_s
+                )
+            } else {
+                format!(
+                    "({{ bool __verun_ok = false; for (int64_t {} = ({}); {} < ({}); ++{}) {{ if (({})) {{ __verun_ok = true; break; }} }} __verun_ok; }})",
+                    var.node, start_s, var.node, end_s, var.node, body_s
+                )
+            }
+        } else if is_forall {
+            "1".to_string()
+        } else {
+            "0".to_string()
         }
     }
 

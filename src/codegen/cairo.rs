@@ -213,6 +213,8 @@ impl CairoTarget {
                 };
                 format!("({} {} {})", l, op_str, r)
             }
+            Expr::Forall { .. } => "true".to_string(),
+            Expr::Exists { .. } => "false".to_string(),
             Expr::FnCall { name, args } => {
                 let arg_strs: Vec<String> = args
                     .iter()

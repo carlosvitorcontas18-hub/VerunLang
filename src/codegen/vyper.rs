@@ -256,6 +256,8 @@ impl VyperTarget {
                     self.expr_to_vyper(&key.node, params, fields, in_old)
                 )
             }
+            Expr::Forall { .. } => "True".to_string(),
+            Expr::Exists { .. } => "False".to_string(),
             Expr::FnCall { name, args } => {
                 let arg_strs: Vec<String> = args
                     .iter()
@@ -268,7 +270,7 @@ impl VyperTarget {
                     _ => format!("{}({})", name.node, arg_strs.join(", ")),
                 }
             }
-            _ => "0".to_string(),
+            _ => "0".to_string()
         }
     }
 

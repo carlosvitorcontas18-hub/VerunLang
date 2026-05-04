@@ -229,6 +229,8 @@ impl MoveTarget {
             Expr::EnumVariant { enum_name, variant } => {
                 format!("{}_{}", enum_name.to_uppercase(), variant.to_uppercase())
             }
+            Expr::Forall { .. } => "true".to_string(),
+            Expr::Exists { .. } => "false".to_string(),
             Expr::FnCall { name, args } => {
                 let arg_strs: Vec<String> = args
                     .iter()

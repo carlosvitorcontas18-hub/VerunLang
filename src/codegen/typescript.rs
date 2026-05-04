@@ -54,6 +54,13 @@ impl TypeScriptTarget {
     }
 
     fn gen_type_def(&self, t: &crate::ast::types::TypeDef) -> String {
+        if let Some(alias_ty) = &t.alias {
+            return format!(
+                "export type {} = {};\n\n",
+                t.name.node,
+                self.type_to_ts(&alias_ty.node)
+            );
+        }
         let mut out = format!("export interface {} {{\n", t.name.node);
         for field in &t.fields {
             out.push_str(&format!(
@@ -257,6 +264,12 @@ impl TypeScriptTarget {
                     self.expr_to_ts(&index.node, params, fields, in_old)
                 )
             }
+            Expr::Forall { var, domain, body } => {
+                self.quantifier_to_ts(var, domain, body, params, fields, in_old, true)
+            }
+            Expr::Exists { var, domain, body } => {
+                self.quantifier_to_ts(var, domain, body, params, fields, in_old, false)
+            }
             Expr::FnCall { name, args } => {
                 let arg_strs: Vec<String> = args
                     .iter()
@@ -421,6 +434,41 @@ impl TypeScriptTarget {
 
     fn is_block_statement(&self, stmt: &Statement) -> bool {
         matches!(stmt, Statement::If { .. } | Statement::Match { .. })
+    }
+
+    fn quantifier_to_ts(
+        &self,
+        var: &crate::ast::span::Spanned<String>,
+        domain: &crate::ast::span::Spanned<Expr>,
+        body: &crate::ast::span::Spanned<Expr>,
+        params: &HashSet<String>,
+        fields: &HashSet<String>,
+        in_old: bool,
+        is_forall: bool,
+    ) -> String {
+        if let Expr::Range { start, end } = &domain.node {
+            let start_s = self.expr_to_ts(&start.node, params, fields, in_old);
+            let end_s = self.expr_to_ts(&end.node, params, fields, in_old);
+            let mut local_params = params.clone();
+            local_params.insert(var.node.clone());
+            let body_s = self.expr_to_ts(&body.node, &local_params, fields, in_old);
+
+            if is_forall {
+                format!(
+                    "(() => {{ for (let {} = ({}); {} < ({}); {}++) {{ if (!({})) return false; }} return true; }})()",
+                    var.node, start_s, var.node, end_s, var.node, body_s
+                )
+            } else {
+                format!(
+                    "(() => {{ for (let {} = ({}); {} < ({}); {}++) {{ if (({})) return true; }} return false; }})()",
+                    var.node, start_s, var.node, end_s, var.node, body_s
+                )
+            }
+        } else if is_forall {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        }
     }
 
     fn match_pattern_condition_ts(&self, subject: &str, pattern: &MatchPattern) -> String {

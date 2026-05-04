@@ -77,6 +77,10 @@ impl JavaTarget {
     }
 
     fn gen_type_def(&self, t: &crate::ast::types::TypeDef) -> String {
+        // Java has no type aliases; for refinement types, skip (base type is used inline)
+        if t.alias.is_some() {
+            return String::new();
+        }
         let mut out = format!("class {} {{\n", t.name.node);
         for field in &t.fields {
             out.push_str(&format!(
@@ -90,7 +94,7 @@ impl JavaTarget {
     }
 
     fn gen_state(&self, state: &StateDef, top_consts: &HashSet<String>) -> String {
-        let mut out = format!("public class {} {{\n", state.name.node);
+        let mut out = format!("class {} {{\n", state.name.node);
 
         for c in &state.constants {
             out.push_str(&format!(
@@ -121,6 +125,8 @@ impl JavaTarget {
 
         out.push_str(&format!("    public {}() {{\n", state.name.node));
         if let Some(init) = &state.init {
+            let assigned: HashSet<&str> =
+                init.assignments.iter().map(|a| a.target.node.as_str()).collect();
             for assign in &init.assignments {
                 out.push_str(&format!(
                     "        this.{} = {};\n",
@@ -133,6 +139,16 @@ impl JavaTarget {
                         false
                     )
                 ));
+            }
+            for field in &state.fields {
+                if !assigned.contains(field.name.node.as_str()) {
+                    if let Some(default) = self.java_default_for_type(&field.ty.node) {
+                        out.push_str(&format!(
+                            "        this.{} = {};\n",
+                            field.name.node, default
+                        ));
+                    }
+                }
             }
         }
         out.push_str("    }\n\n");
@@ -320,7 +336,7 @@ impl JavaTarget {
             }
             Expr::IndexAccess { object, index } => {
                 format!(
-                    "{}[{}]",
+                    "{}[(int)({})]" ,
                     self.expr_to_java(&object.node, params, fields, top_consts, in_old),
                     self.expr_to_java(&index.node, params, fields, top_consts, in_old)
                 )
@@ -331,6 +347,12 @@ impl JavaTarget {
                     self.expr_to_java(&map.node, params, fields, top_consts, in_old),
                     self.expr_to_java(&key.node, params, fields, top_consts, in_old)
                 )
+            }
+            Expr::Forall { var, domain, body } => {
+                self.quantifier_to_java(var, domain, body, params, fields, top_consts, in_old, true)
+            }
+            Expr::Exists { var, domain, body } => {
+                self.quantifier_to_java(var, domain, body, params, fields, top_consts, in_old, false)
             }
             Expr::FnCall { name, args } => {
                 let arg_strs: Vec<String> = args
@@ -387,7 +409,7 @@ impl JavaTarget {
                 index,
                 value,
             } => format!(
-                "this.{}[{}] = {}",
+                "this.{}[(int)({})] = {}",
                 target.node,
                 self.expr_to_java(&index.node, params, fields, top_consts, false),
                 self.expr_to_java(&value.node, params, fields, top_consts, false)
@@ -405,7 +427,7 @@ impl JavaTarget {
                     CompoundOp::Div => "/=",
                 };
                 format!(
-                    "this.{}[{}] {} {}",
+                    "this.{}[(int)({})] {} {}",
                     target.node,
                     self.expr_to_java(&index.node, params, fields, top_consts, false),
                     op_str,
@@ -490,6 +512,65 @@ impl JavaTarget {
                 out.push_str("        }");
                 out
             }
+        }
+    }
+
+    fn quantifier_to_java(
+        &self,
+        var: &crate::ast::span::Spanned<String>,
+        domain: &crate::ast::span::Spanned<Expr>,
+        body: &crate::ast::span::Spanned<Expr>,
+        params: &HashSet<String>,
+        fields: &HashSet<String>,
+        top_consts: &HashSet<String>,
+        in_old: bool,
+        is_forall: bool,
+    ) -> String {
+        if let Expr::Range { start, end } = &domain.node {
+            let start_s = self.expr_to_java(&start.node, params, fields, top_consts, in_old);
+            let end_s = self.expr_to_java(&end.node, params, fields, top_consts, in_old);
+            let mut local_params = params.clone();
+            local_params.insert(var.node.clone());
+            let body_s = self.expr_to_java(&body.node, &local_params, fields, top_consts, in_old);
+
+            if is_forall {
+                format!(
+                    "java.util.stream.IntStream.range((int)({}), (int)({})).allMatch({} -> ({}))",
+                    start_s, end_s, var.node, body_s
+                )
+            } else {
+                format!(
+                    "java.util.stream.IntStream.range((int)({}), (int)({})).anyMatch({} -> ({}))",
+                    start_s, end_s, var.node, body_s
+                )
+            }
+        } else if is_forall {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        }
+    }
+
+    fn java_default_for_type(&self, ty: &Type) -> Option<String> {
+        match ty {
+            Type::Array { element, size } => {
+                Some(format!("new {}[{}]", self.java_primitive_element(element), size))
+            }
+            Type::Map { key, value } => Some(format!(
+                "new java.util.HashMap<{}, {}>()",
+                self.boxed_java_type(key),
+                self.boxed_java_type(value)
+            )),
+            _ => None,
+        }
+    }
+
+    fn java_primitive_element(&self, ty: &Type) -> String {
+        match ty {
+            Type::Int => "long".to_string(),
+            Type::Real => "double".to_string(),
+            Type::Bool => "boolean".to_string(),
+            _ => self.type_to_java(ty),
         }
     }
 

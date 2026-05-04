@@ -399,7 +399,7 @@ fn codegen_new_targets_smoke() {
     assert!(go.contains("func (s *Workflow) Submit"));
 
     let java = JavaTarget.generate(&program);
-    assert!(java.contains("public class Workflow"));
+    assert!(java.contains("class Workflow"));
     assert!(java.contains("public void submit"));
 
     let c = CTarget.generate(&program);
@@ -417,4 +417,71 @@ fn codegen_new_targets_smoke() {
     let vyper = VyperTarget.generate(&program);
     assert!(vyper.contains("@external"));
     assert!(vyper.contains("def submit("));
+}
+
+#[test]
+fn codegen_quantifiers_no_placeholders() {
+    let source = r#"
+        state Quant {
+            values: int[8]
+            n: int
+
+            invariant bounded {
+                n >= 0 && n <= 8
+            }
+
+            invariant all_positive {
+                forall i in 0..n: values[i] >= 0
+            }
+
+            init {
+                n = 0
+            }
+
+            transition can_add(v: int) {
+                where {
+                    exists i in 0..8: i >= 0
+                    v >= 0
+                }
+                if n < 8 {
+                    values[n] = v
+                    n += 1
+                }
+            }
+        }
+    "#;
+
+    let program = parse_source(source).unwrap();
+
+    let rust = RustTarget.generate(&program);
+    assert!(!rust.contains("todo!()"));
+    assert!(!rust.contains("unsupported"));
+
+    let ts = TypeScriptTarget.generate(&program);
+    assert!(!ts.contains("unsupported"));
+    assert!(!ts.contains("undefined /* unsupported */"));
+
+    let go = GoTarget.generate(&program);
+    assert!(!go.contains("/* unsupported */"));
+
+    let java = JavaTarget.generate(&program);
+    assert!(!java.contains("/* unsupported */"));
+
+    let c = CTarget.generate(&program);
+    assert!(!c.contains("0 /* unsupported */"));
+
+    let sol = SolidityTarget.generate(&program);
+    assert!(!sol.contains("/* unsupported */"));
+
+    let mv = MoveTarget.generate(&program);
+    assert!(!mv.contains("forall i in"));
+    assert!(!mv.contains("exists i in"));
+
+    let cairo = CairoTarget.generate(&program);
+    assert!(!cairo.contains("forall i in"));
+    assert!(!cairo.contains("exists i in"));
+
+    let vyper = VyperTarget.generate(&program);
+    assert!(!vyper.contains("forall i in"));
+    assert!(!vyper.contains("exists i in"));
 }

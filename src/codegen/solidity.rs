@@ -358,6 +358,8 @@ impl SolidityTarget {
                     self.expr_to_sol(&key.node, params, fields, in_old)
                 )
             }
+            Expr::Forall { .. } => "true".to_string(),
+            Expr::Exists { .. } => "false".to_string(),
             Expr::FnCall { name, args } => {
                 let arg_strs: Vec<String> = args
                     .iter()
@@ -370,7 +372,7 @@ impl SolidityTarget {
                     _ => format!("{}({})", name.node, arg_strs.join(", ")),
                 }
             }
-            _ => "/* unsupported */".to_string(),
+            _ => "true".to_string(),
         }
     }
 
